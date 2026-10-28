@@ -1,3 +1,4 @@
+import copy
 import time
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
@@ -9,6 +10,7 @@ from .schemas import (
     AnalyzeResponse,
     AufVariant,
     CoachComment,
+    ColorCrossSummary,
     InsertionHighlight,
     OrientationResult,
     PairCard,
@@ -16,13 +18,27 @@ from .schemas import (
     Route,
 )
 
-# WCA scrambling orientation is white top / green front; the engine labels
-# stickers by their home face, so these map sticker labels to colours.
 FACE_COLORS: Dict[str, Tuple[str, str]] = {
     "U": ("white", "白"), "D": ("yellow", "黄"),
     "F": ("green", "绿"), "B": ("blue", "蓝"),
     "R": ("red", "红"), "L": ("orange", "橙"),
 }
+
+CROSS_COLOR_CONFIG: Dict[str, Tuple[str, str, str]] = {
+    "white":  ("z2", "白底", "U"),
+    "yellow": ("",   "黄底", "D"),
+    "green":  ("x'", "绿底", "F"),
+    "blue":   ("x",  "蓝底", "B"),
+    "red":    ("z",  "红底", "R"),
+    "orange": ("z'", "橙底", "L"),
+}
+
+COLOR_MODE_PRESETS: Dict[str, Tuple[str, ...]] = {
+    "white": ("white",),
+    "dual": ("white", "yellow"),
+    "full": ("white", "yellow", "green", "blue", "red", "orange"),
+}
+
 CROSS_ON_BOTTOM = "z2"
 ORIENTATIONS = ["", "y", "y'", "y2"]
 SLOT_LABELS = {"FR": "FR 前右槽", "FL": "FL 前左槽", "BR": "BR 后右槽", "BL": "BL 后左槽"}
@@ -33,7 +49,6 @@ STUCK_MIN_MOVES = 7
 STANDARD_INSERT_MAX_MOVES = 5
 INSERTION_AUFS = ("U", "U'")
 
-# Same weighting as the engine's __main__ demo: 40% cross ergonomics, 60% first pair.
 CROSS_WEIGHT = 0.4
 PAIR_WEIGHT = 0.6
 
@@ -147,8 +162,8 @@ def analyze_cross_state(cross_solved: Cube3D) -> List[PairCard]:
     return [build_pair_card(cross_solved, r) for r in reports]
 
 
-def playback_alg(rotation: str, cross: str, pair_alg: Optional[str]) -> str:
-    return join_algs(CROSS_ON_BOTTOM, rotation, cross, pair_alg or "")
+def playback_alg(rotation: str, cross: str, pair_alg: Optional[str], base_rotation: str = CROSS_ON_BOTTOM) -> str:
+    return join_algs(base_rotation, rotation, cross, pair_alg or "")
 
 
 def best_good_moves(pairs: List[PairCard]) -> Optional[int]:
@@ -157,10 +172,15 @@ def best_good_moves(pairs: List[PairCard]) -> Optional[int]:
 
 
 def find_insertions(
-    rotation: str, label: str, base: Cube3D, cross: str, base_pairs: List[PairCard]
+    rotation: str,
+    label: str,
+    base: Cube3D,
+    cross: str,
+    base_pairs: List[PairCard],
+    cross_color: str = "white",
+    cross_color_label: str = "白底",
+    base_rotation: str = CROSS_ON_BOTTOM,
 ) -> Tuple[List[AufVariant], List[InsertionHighlight]]:
-    """Insert an AUF before the final cross move (engine's optimize_last_cross_step)
-    and flag slots that go from a >=7-move stuck pair to a <=5-move standard insert."""
     variants: List[AufVariant] = []
     highlights: List[InsertionHighlight] = []
     tokens = cross.split()
@@ -171,7 +191,6 @@ def find_insertions(
     before_best = best_good_moves(base_pairs)
 
     for auf, full_cross, _best in CPlusOneTutor.optimize_last_cross_step(base, cross, ENGINE):
-        # The engine joins prefix/auf/final with spaces, leaving a double space when auf == "".
         full_cross = join_algs(*full_cross.split())
         if full_cross == cross or auf not in ("U", "U'", "U2"):
             continue
@@ -196,16 +215,29 @@ def find_insertions(
             full = join_algs(full_cross, p.rul_alg)
             end = base.clone().apply(full)
             highlights.append(InsertionHighlight(
-                rotation=rotation, orientation_label=label,
-                original_cross=cross, auf=auf, final_move=tokens[-1], new_cross=full_cross,
-                slot=p.slot, slot_label=p.slot_label, is_back_slot=p.is_back_slot,
-                before_moves=b.rul_moves, before_alg=b.rul_alg or "",
-                before_corner_location=b.corner_location, before_edge_location=b.edge_location,
-                after_moves=p.rul_moves, after_alg=p.rul_alg or "", after_trigger=p.trigger,
+                cross_color=cross_color,
+                cross_color_label=cross_color_label,
+                base_rotation=base_rotation,
+                rotation=rotation,
+                orientation_label=label,
+                original_cross=cross,
+                auf=auf,
+                final_move=tokens[-1],
+                new_cross=full_cross,
+                slot=p.slot,
+                slot_label=p.slot_label,
+                is_back_slot=p.is_back_slot,
+                before_moves=b.rul_moves,
+                before_alg=b.rul_alg or "",
+                before_corner_location=b.corner_location,
+                before_edge_location=b.edge_location,
+                after_moves=p.rul_moves,
+                after_alg=p.rul_alg or "",
+                after_trigger=p.trigger,
                 improves_first_pair=before_best is None or p.rul_moves < before_best,
                 before_best_moves=before_best,
                 full_solution=full,
-                playback_alg=playback_alg(rotation, full_cross, p.rul_alg),
+                playback_alg=playback_alg(rotation, full_cross, p.rul_alg, base_rotation=base_rotation),
                 verified=end.is_cross_solved() and is_slot_solved(end, p.slot),
             ))
 
@@ -217,14 +249,25 @@ def highlight_rank_key(h: InsertionHighlight):
     return (h.improves_first_pair, h.is_back_slot, -h.after_moves, h.before_moves - h.after_moves)
 
 
-def build_route(rotation: str, label: str, base: Cube3D, cross: str) -> Route:
+def build_route(
+    rotation: str,
+    label: str,
+    base: Cube3D,
+    cross: str,
+    cross_color: str = "white",
+    cross_color_label: str = "白底",
+    base_rotation: str = CROSS_ON_BOTTOM,
+) -> Route:
     solved = base.clone().apply(cross)
     pairs = analyze_cross_state(solved)
     first = pairs[0]
     pair_alg = first.rul_alg or ""
     end = solved.clone().apply(pair_alg)
     verified = end.is_cross_solved() and (first.rul_alg is None or is_slot_solved(end, first.slot))
-    variants, highlights = find_insertions(rotation, label, base, cross, pairs)
+    variants, highlights = find_insertions(
+        rotation, label, base, cross, pairs,
+        cross_color=cross_color, cross_color_label=cross_color_label, base_rotation=base_rotation
+    )
     erg = CPlusOneTutor.cross_ergonomic_score(cross)
     return Route(
         cross=cross,
@@ -235,26 +278,36 @@ def build_route(rotation: str, label: str, base: Cube3D, cross: str) -> Route:
         first_pair=first,
         pairs=pairs,
         full_solution=join_algs(cross, pair_alg),
-        playback_alg=playback_alg(rotation, cross, pair_alg),
+        playback_alg=playback_alg(rotation, cross, pair_alg, base_rotation=base_rotation),
         verified=verified,
         auf_variants=variants,
         insertion_highlights=sorted(highlights, key=highlight_rank_key, reverse=True),
     )
 
 
-def analyze_orientation(scramble: str, rotation: str) -> OrientationResult:
-    base = FastCube().apply(scramble).apply(CROSS_ON_BOTTOM).apply(rotation)
+def analyze_orientation(scramble: str, rotation: str, cross_color: str = "white") -> OrientationResult:
+    base_rotation, cross_color_label, _ = CROSS_COLOR_CONFIG.get(cross_color, ("z2", "白底", "U"))
+    base = FastCube().apply(scramble).apply(base_rotation).apply(rotation)
     front_en, front_zh = FACE_COLORS[base.center_color("F")]
     label = f"{front_zh}前 ({rotation or '无预转'})"
     crosses = ENGINE.solve_crosses(base, max_solutions=MAX_CROSS_SOLUTIONS)
     if not crosses:
-        raise RuntimeError(f"Engine found no cross solution for rotation '{rotation}'")
-    routes = [build_route(rotation, label, base, c) for c in crosses]
+        raise RuntimeError(f"Engine found no cross solution for color '{cross_color}' rotation '{rotation}'")
+    routes = [
+        build_route(
+            rotation, label, base, c,
+            cross_color=cross_color, cross_color_label=cross_color_label, base_rotation=base_rotation
+        )
+        for c in crosses
+    ]
     routes.sort(key=lambda r: r.total_score, reverse=True)
     return OrientationResult(
         rank=0,
+        cross_color=cross_color,
+        cross_color_label=cross_color_label,
+        base_rotation=base_rotation,
         rotation=rotation,
-        inspection_alg=join_algs(CROSS_ON_BOTTOM, rotation),
+        inspection_alg=join_algs(base_rotation, rotation),
         front_color=front_en,
         label=label,
         optimal_cross_moves=len(crosses[0].split()),
@@ -263,30 +316,70 @@ def analyze_orientation(scramble: str, rotation: str) -> OrientationResult:
     )
 
 
-@lru_cache(maxsize=256)
-def analyze_scramble(scramble: str) -> AnalyzeResponse:
-    """``scramble`` must already be normalized (see backend.scramble)."""
-    from .coach import template_comment
-
-    t0 = time.perf_counter()
-    orientations = [analyze_orientation(scramble, rot) for rot in ORIENTATIONS]
+@lru_cache(maxsize=512)
+def analyze_single_color(scramble: str, cross_color: str = "white") -> ColorCrossSummary:
+    base_rotation, cross_color_label, _ = CROSS_COLOR_CONFIG.get(cross_color, ("z2", "白底", "U"))
+    orientations = [analyze_orientation(scramble, rot, cross_color=cross_color) for rot in ORIENTATIONS]
     orientations.sort(key=lambda o: (-o.best_route.total_score, o.optimal_cross_moves))
     for i, o in enumerate(orientations, 1):
         o.rank = i
-
     best_o = orientations[0]
+    best_r = best_o.best_route
+    return ColorCrossSummary(
+        rank=1,
+        cross_color=cross_color,
+        cross_color_label=cross_color_label,
+        base_rotation=base_rotation,
+        optimal_cross_moves=min(o.optimal_cross_moves for o in orientations),
+        best_total_score=best_r.total_score,
+        best_c1_score=best_r.c1_score,
+        best_rotation=best_o.rotation,
+        best_orientation_label=best_o.label,
+        best_slot=best_r.first_pair.slot,
+        best_slot_moves=best_r.first_pair.rul_moves,
+        orientations=orientations,
+        best_orientation=best_o,
+    )
+
+
+def resolve_colors(color_mode: str = "white", cross_colors: Optional[List[str]] = None) -> Tuple[str, ...]:
+    if cross_colors:
+        valid = [c for c in cross_colors if c in CROSS_COLOR_CONFIG]
+        if valid:
+            return tuple(dict.fromkeys(valid))
+    return COLOR_MODE_PRESETS.get(color_mode, ("white",))
+
+
+@lru_cache(maxsize=256)
+def _analyze_cached(scramble: str, color_mode: str, colors_tuple: Tuple[str, ...]) -> AnalyzeResponse:
+    from .coach import template_comment
+
+    t0 = time.perf_counter()
+    summaries = [copy.deepcopy(analyze_single_color(scramble, c)) for c in colors_tuple]
+    summaries.sort(key=lambda s: (-s.best_total_score, s.optimal_cross_moves))
+    for i, s in enumerate(summaries, 1):
+        s.rank = i
+
+    best_summary = summaries[0]
+    orientations = best_summary.orientations
+    best_o = best_summary.best_orientation
     best = best_o.best_route
+
     highlights = sorted(
-        (h for o in orientations for r in o.routes for h in r.insertion_highlights),
+        (h for s in summaries for o in s.orientations for r in o.routes for h in r.insertion_highlights),
         key=highlight_rank_key, reverse=True,
     )
     pair_alg = best.first_pair.rul_alg or ""
     response = AnalyzeResponse(
         scramble=scramble,
-        cross_color=FACE_COLORS[Cube3D().apply(CROSS_ON_BOTTOM).center_color("D")][0],
+        color_mode=color_mode,
+        cross_color=best_summary.cross_color,
+        cross_color_label=best_summary.cross_color_label,
         orientations=orientations,
         best_orientation=best_o,
         best_route=best,
+        color_summaries=summaries,
+        global_best_orientation=best_o,
         playback=Playback(
             setup_alg=scramble,
             alg=best.playback_alg,
@@ -302,3 +395,12 @@ def analyze_scramble(scramble: str) -> AnalyzeResponse:
     response.coach = template_comment(response)
     response.elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     return response
+
+
+def analyze_scramble(
+    scramble: str,
+    color_mode: str = "white",
+    cross_colors: Optional[List[str]] = None,
+) -> AnalyzeResponse:
+    colors_tuple = resolve_colors(color_mode, cross_colors)
+    return _analyze_cached(scramble, color_mode, colors_tuple)

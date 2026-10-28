@@ -1,9 +1,9 @@
 import ReviewApp from "@/components/ReviewApp";
 
-export default function Home() {
+export default function TimerRoutePage() {
   return (
     <main className="flex-1">
-      <ReviewApp />
+      <ReviewApp initialPage="timer" />
     </main>
   );
 }

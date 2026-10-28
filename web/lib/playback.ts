@@ -6,15 +6,20 @@ export function routePlayback(
   route: Route,
   pair: PairCard | null = route.first_pair,
 ): PlaybackSelection {
+  const colorLabel = orientation.cross_color_label || "白底";
   const segments: PlaybackSelection["segments"] = [
-    { label: "观察转体", alg: orientation.inspection_alg, tone: "rotation" },
-    { label: `十字 ${route.cross_moves} 步`, alg: route.cross, tone: "cross" },
+    {
+      label: `起手拿法 (${colorLabel})`,
+      alg: orientation.inspection_alg,
+      tone: "rotation",
+    },
+    { label: `底十字 (${route.cross_moves}步)`, alg: route.cross, tone: "cross" },
   ];
   if (pair?.rul_alg) {
-    segments.push({ label: `首组 ${pair.slot} ${pair.rul_moves} 步`, alg: pair.rul_alg, tone: "pair" });
+    segments.push({ label: `第一组 ${pair.slot} (${pair.rul_moves}步)`, alg: pair.rul_alg, tone: "pair" });
   }
   return {
-    title: `${orientation.label} · ${pair?.rul_alg ? `十字 + ${pair.slot}` : "十字"}`,
+    title: `${colorLabel} · ${orientation.label} · ${pair?.rul_alg ? `十字 + ${pair.slot} 槽` : "仅十字"}`,
     setupAlg: scramble,
     segments: segments.filter((s) => s.alg.trim().length > 0),
   };
@@ -22,15 +27,21 @@ export function routePlayback(
 
 export function highlightPlayback(scramble: string, h: InsertionHighlight): PlaybackSelection {
   const prefix = h.original_cross.split(" ").slice(0, -1).join(" ");
+  const baseRot = h.base_rotation !== undefined ? h.base_rotation : "z2";
+  const colorLabel = h.cross_color_label || "白底";
   const segments: PlaybackSelection["segments"] = [
-    { label: "观察转体", alg: ["z2", h.rotation].filter(Boolean).join(" "), tone: "rotation" },
+    {
+      label: `起手拿法 (${colorLabel})`,
+      alg: [baseRot, h.rotation].filter(Boolean).join(" "),
+      tone: "rotation",
+    },
     { label: "十字前段", alg: prefix, tone: "cross" },
-    { label: `插入 ${h.auf}`, alg: h.auf, tone: "auf" },
+    { label: `加一步 ${h.auf}`, alg: h.auf, tone: "auf" },
     { label: "十字收尾", alg: h.final_move, tone: "cross" },
-    { label: `${h.slot} ${h.after_moves} 步直插`, alg: h.after_alg, tone: "pair" },
+    { label: `第一组 ${h.slot} (${h.after_moves}步)`, alg: h.after_alg, tone: "pair" },
   ];
   return {
-    title: `${h.orientation_label} · ${h.auf} 插入优化 → ${h.slot}`,
+    title: `${colorLabel} · ${h.orientation_label} · 插入 ${h.auf} 优化 → ${h.slot} 槽`,
     setupAlg: scramble,
     segments: segments.filter((s) => s.alg.trim().length > 0),
   };

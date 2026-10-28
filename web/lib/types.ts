@@ -1,7 +1,10 @@
 export type PairCategory = "excellent" | "comfortable" | "stuck" | "bad_eo";
+export type ColorMode = "white" | "dual" | "full" | "custom";
+export type CrossColorName = "white" | "yellow" | "green" | "blue" | "red" | "orange";
+export type SlotName = "FR" | "FL" | "BR" | "BL";
 
 export interface PairCard {
-  slot: "FR" | "FL" | "BR" | "BL";
+  slot: SlotName;
   slot_label: string;
   is_back_slot: boolean;
   edge_good_eo: boolean;
@@ -30,13 +33,16 @@ export interface AufVariant {
 }
 
 export interface InsertionHighlight {
+  cross_color: CrossColorName;
+  cross_color_label: string;
+  base_rotation: string;
   rotation: string;
   orientation_label: string;
   original_cross: string;
   auf: string;
   final_move: string;
   new_cross: string;
-  slot: string;
+  slot: SlotName;
   slot_label: string;
   is_back_slot: boolean;
   before_moves: number;
@@ -70,6 +76,9 @@ export interface Route {
 
 export interface OrientationResult {
   rank: number;
+  cross_color: CrossColorName;
+  cross_color_label: string;
+  base_rotation: string;
   rotation: string;
   inspection_alg: string;
   front_color: string;
@@ -79,20 +88,40 @@ export interface OrientationResult {
   routes: Route[];
 }
 
+export interface ColorCrossSummary {
+  rank: number;
+  cross_color: CrossColorName;
+  cross_color_label: string;
+  base_rotation: string;
+  optimal_cross_moves: number;
+  best_total_score: number;
+  best_c1_score: number;
+  best_rotation: string;
+  best_orientation_label: string;
+  best_slot: SlotName;
+  best_slot_moves: number | null;
+  orientations: OrientationResult[];
+  best_orientation: OrientationResult;
+}
+
 export interface CoachComment {
   text: string;
   source: "llm" | "template";
-  kind: "insertion" | "general";
+  kind: "insertion" | "general" | "color_neutral";
   model: string | null;
   fallback_reason: string | null;
 }
 
 export interface AnalyzeResponse {
   scramble: string;
-  cross_color: string;
+  color_mode: ColorMode;
+  cross_color: CrossColorName;
+  cross_color_label: string;
   orientations: OrientationResult[];
   best_orientation: OrientationResult;
   best_route: Route;
+  color_summaries: ColorCrossSummary[];
+  global_best_orientation: OrientationResult | null;
   playback: {
     setup_alg: string;
     alg: string;
@@ -116,4 +145,15 @@ export interface PlaybackSelection {
   title: string;
   setupAlg: string;
   segments: PlaybackSegment[];
+}
+
+export type PenaltyType = "OK" | "+2" | "DNF";
+
+export interface CsTimerSolve {
+  id: string;
+  timestamp: number;
+  scramble: string;
+  timeMs: number;
+  penalty: PenaltyType;
+  comment?: string;
 }
